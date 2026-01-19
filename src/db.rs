@@ -84,17 +84,34 @@ pub fn insert_category(conn: &Connection, name: &str, kind: &str) -> Result<()> 
     Ok(())
 }
 
-pub fn list_transactions(conn: &Connection) -> Result<Vec<TransactionRecord>> {
-    let mut stmt = conn.prepare(
-        "
-        SELECT t.id, t.kind, t.amount_cents, t.occurred_on, t.note, c.name
-        FROM transactions t
-        LEFT JOIN categories c ON t.category_id = c.id
-        ORDER BY t.occurred_on DESC, t.id DESC
-        LIMIT 100
-        ",
-    )?;
-    let rows = stmt.query_map([], |row| {
+pub fn list_transactions(conn: &Connection, month: Option<&str>) -> Result<Vec<TransactionRecord>> {
+    let (query, params) = if let Some(month) = month {
+        (
+            "
+            SELECT t.id, t.kind, t.amount_cents, t.occurred_on, t.note, c.name
+            FROM transactions t
+            LEFT JOIN categories c ON t.category_id = c.id
+            WHERE t.occurred_on LIKE ?1
+            ORDER BY t.occurred_on DESC, t.id DESC
+            LIMIT 200
+            ",
+            params![format!("{}-%", month)],
+        )
+    } else {
+        (
+            "
+            SELECT t.id, t.kind, t.amount_cents, t.occurred_on, t.note, c.name
+            FROM transactions t
+            LEFT JOIN categories c ON t.category_id = c.id
+            ORDER BY t.occurred_on DESC, t.id DESC
+            LIMIT 200
+            ",
+            params![],
+        )
+    };
+
+    let mut stmt = conn.prepare(query)?;
+    let rows = stmt.query_map(params, |row| {
         Ok(TransactionRecord {
             id: row.get(0)?,
             kind: row.get(1)?,
@@ -284,6 +301,44 @@ pub fn report_categories(conn: &Connection, month: &str) -> Result<Vec<ReportCat
             expense_cents: row.get(1)?,
         })
     })?;
+
+    let mut out = Vec::new();
+    for row in rows {
+        out.push(row?);
+    }
+    Ok(out)
+}
+
+pub fn list_months(conn: &Connection, limit: i64) -> Result<Vec<String>> {
+    let mut stmt = conn.prepare(
+        "
+        SELECT substr(occurred_on, 1, 7) AS month
+        FROM transactions
+        GROUP BY month
+        ORDER BY month DESC
+        LIMIT ?1
+        ",
+    )?;
+    let rows = stmt.query_map(params![limit], |row| row.get(0))?;
+
+    let mut out = Vec::new();
+    for row in rows {
+        out.push(row?);
+    }
+    Ok(out)
+}
+
+pub fn list_budget_months(conn: &Connection, limit: i64) -> Result<Vec<String>> {
+    let mut stmt = conn.prepare(
+        "
+        SELECT month
+        FROM budgets
+        GROUP BY month
+        ORDER BY month DESC
+        LIMIT ?1
+        ",
+    )?;
+    let rows = stmt.query_map(params![limit], |row| row.get(0))?;
 
     let mut out = Vec::new();
     for row in rows {

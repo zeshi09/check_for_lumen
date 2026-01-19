@@ -6,6 +6,17 @@
     <h1>Бюджеты</h1>
     <p class="muted">Лимиты по категориям расходов</p>
   </div>
+  <form method="get" action="/budgets" class="inline-form">
+    <label>
+      Месяц
+      <select name="month">
+        {% for m in months %}
+          <option value="{{ m }}" {% if m == month %}selected{% endif %}>{{ m }}</option>
+        {% endfor %}
+      </select>
+    </label>
+    <button type="submit" class="button small">Фильтр</button>
+  </form>
 </section>
 
 <section class="grid grid-2">

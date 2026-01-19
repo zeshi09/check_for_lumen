@@ -191,6 +191,22 @@ main {
   gap: 12px;
 }
 
+.inline-form {
+  display: flex;
+  gap: 12px;
+  align-items: flex-end;
+  flex-wrap: wrap;
+}
+
+.inline-form label {
+  display: grid;
+  gap: 6px;
+  font-size: 12px;
+  text-transform: uppercase;
+  letter-spacing: 1.2px;
+  color: var(--muted);
+}
+
 .form label {
   display: grid;
   gap: 6px;
@@ -215,6 +231,11 @@ select {
   font-weight: 600;
   cursor: pointer;
   transition: transform 0.2s ease, box-shadow 0.2s ease;
+}
+
+.button.small {
+  padding: 8px 12px;
+  font-size: 12px;
 }
 
 .button:hover {

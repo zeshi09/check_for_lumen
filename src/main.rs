@@ -130,19 +130,33 @@ fn current_month() -> String {
     Local::now().date_naive().format("%Y-%m").to_string()
 }
 
-#[get("/")]
-fn dashboard(pool: &State<DbPool>) -> Template {
-    let month = current_month();
+fn available_months(conn: &rusqlite::Connection) -> Vec<String> {
+    let mut months = db::list_months(conn, 24).unwrap_or_default();
+    let budget_months = db::list_budget_months(conn, 24).unwrap_or_default();
+    months.extend(budget_months);
+    months.push(current_month());
+    months.sort();
+    months.dedup();
+    months.reverse();
+    months
+}
+
+#[get("/?<month>")]
+fn dashboard(pool: &State<DbPool>, month: Option<String>) -> Template {
+    let selected = month.unwrap_or_else(current_month);
     let conn = pool.get().expect("db connection");
-    let (income_cents, expense_cents) = db::month_totals(&conn, &month).unwrap_or((0, 0));
-    let budgets = db::dashboard_budgets(&conn, &month).unwrap_or_default();
+    let (income_cents, expense_cents) =
+        db::month_totals(&conn, &selected).unwrap_or((0, 0));
+    let budgets = db::dashboard_budgets(&conn, &selected).unwrap_or_default();
     let budget_views = budgets
         .into_iter()
         .map(dashboard_budget_view)
         .collect::<Vec<_>>();
+    let months = available_months(&conn);
 
     let context = serde_json::json!({
-        "month": month,
+        "month": selected,
+        "months": months,
         "income": format_money(income_cents),
         "expense": format_money(expense_cents),
         "net": format_money(income_cents - expense_cents),
@@ -151,14 +165,18 @@ fn dashboard(pool: &State<DbPool>) -> Template {
     Template::render("dashboard", &context)
 }
 
-#[get("/transactions")]
-fn transactions(pool: &State<DbPool>) -> Template {
+#[get("/transactions?<month>")]
+fn transactions(pool: &State<DbPool>, month: Option<String>) -> Template {
     let conn = pool.get().expect("db connection");
-    let records = db::list_transactions(&conn).unwrap_or_default();
+    let selected = month.unwrap_or_else(current_month);
+    let records = db::list_transactions(&conn, Some(&selected)).unwrap_or_default();
     let categories = db::list_categories(&conn).unwrap_or_default();
     let views = records.into_iter().map(transaction_view).collect::<Vec<_>>();
+    let months = available_months(&conn);
 
     let context = serde_json::json!({
+        "month": selected,
+        "months": months,
         "today": today_ymd(),
         "transactions": views,
         "categories": categories,
@@ -188,7 +206,7 @@ fn add_transaction(pool: &State<DbPool>, form: Form<TransactionForm>) -> Result<
     )
     .map_err(|_| rocket::http::Status::InternalServerError)?;
 
-    Ok(Redirect::to(uri!(transactions)))
+    Ok(Redirect::to("/transactions"))
 }
 
 #[get("/categories")]
@@ -210,19 +228,21 @@ fn add_category(pool: &State<DbPool>, form: Form<CategoryForm>) -> Result<Redire
     let conn = pool.get().map_err(|_| rocket::http::Status::InternalServerError)?;
     db::insert_category(&conn, form.name.trim(), &form.kind)
         .map_err(|_| rocket::http::Status::InternalServerError)?;
-    Ok(Redirect::to(uri!(categories)))
+    Ok(Redirect::to("/categories"))
 }
 
-#[get("/budgets")]
-fn budgets(pool: &State<DbPool>) -> Template {
+#[get("/budgets?<month>")]
+fn budgets(pool: &State<DbPool>, month: Option<String>) -> Template {
     let conn = pool.get().expect("db connection");
-    let month = current_month();
-    let list = db::list_budgets(&conn, &month).unwrap_or_default();
+    let selected = month.unwrap_or_else(current_month);
+    let list = db::list_budgets(&conn, &selected).unwrap_or_default();
     let categories = db::list_categories(&conn).unwrap_or_default();
     let views = list.into_iter().map(budget_view).collect::<Vec<_>>();
+    let months = available_months(&conn);
 
     let context = serde_json::json!({
-        "month": month,
+        "month": selected,
+        "months": months,
         "budgets": views,
         "categories": categories,
     });
@@ -243,15 +263,16 @@ fn add_budget(pool: &State<DbPool>, form: Form<BudgetForm>) -> Result<Redirect, 
     let conn = pool.get().map_err(|_| rocket::http::Status::InternalServerError)?;
     db::insert_budget(&conn, form.category_id, &month, amount_cents)
         .map_err(|_| rocket::http::Status::InternalServerError)?;
-    Ok(Redirect::to(uri!(budgets)))
+    Ok(Redirect::to("/budgets"))
 }
 
-#[get("/reports")]
-fn reports(pool: &State<DbPool>) -> Template {
+#[get("/reports?<month>")]
+fn reports(pool: &State<DbPool>, month: Option<String>) -> Template {
     let conn = pool.get().expect("db connection");
-    let month = current_month();
+    let selected = month.unwrap_or_else(current_month);
     let months = db::report_months(&conn, 12).unwrap_or_default();
-    let categories = db::report_categories(&conn, &month).unwrap_or_default();
+    let categories = db::report_categories(&conn, &selected).unwrap_or_default();
+    let month_options = available_months(&conn);
 
     let month_views = months
         .into_iter()
@@ -263,7 +284,8 @@ fn reports(pool: &State<DbPool>) -> Template {
         .collect::<Vec<_>>();
 
     let context = serde_json::json!({
-        "month": month,
+        "month": selected,
+        "month_options": month_options,
         "months": month_views,
         "categories": category_views,
     });
