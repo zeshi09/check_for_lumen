@@ -182,6 +182,37 @@ pub fn delete_session(conn: &Connection, token: &str) -> Result<()> {
     Ok(())
 }
 
+pub fn session_count(conn: &Connection, user_id: i64) -> Result<i64> {
+    conn.query_row(
+        "SELECT COUNT(*) FROM sessions WHERE user_id = ?1",
+        params![user_id],
+        |row| row.get(0),
+    )
+}
+
+pub fn delete_sessions_for_user(conn: &Connection, user_id: i64) -> Result<()> {
+    conn.execute("DELETE FROM sessions WHERE user_id = ?1", params![user_id])?;
+    Ok(())
+}
+
+pub fn prune_sessions(conn: &Connection, user_id: i64, keep: i64) -> Result<()> {
+    conn.execute(
+        "
+        DELETE FROM sessions
+        WHERE user_id = ?1
+          AND id NOT IN (
+            SELECT id
+            FROM sessions
+            WHERE user_id = ?1
+            ORDER BY created_at DESC, id DESC
+            LIMIT ?2
+          )
+        ",
+        params![user_id, keep],
+    )?;
+    Ok(())
+}
+
 pub fn list_transactions(conn: &Connection, month: Option<&str>) -> Result<Vec<TransactionRecord>> {
     let (query, params) = if let Some(month) = month {
         (

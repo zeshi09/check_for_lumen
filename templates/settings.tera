@@ -1,0 +1,45 @@
+{% extends "layout.tera" %}
+
+{% block content %}
+<section class="page-head">
+  <div>
+    <h1>Настройки</h1>
+    <p class="muted">Управление учетной записью</p>
+  </div>
+</section>
+
+<section class="grid grid-2">
+  <div class="card">
+    <h2>Сброс пароля</h2>
+    {% if error %}
+      <p class="error">{{ error }}</p>
+    {% endif %}
+    {% if notice %}
+      <p class="notice">{{ notice }}</p>
+    {% endif %}
+    <form method="post" action="/settings/password" class="form">
+      <label>
+        Текущий пароль
+        <input type="password" name="current_password" required />
+      </label>
+      <label>
+        Новый пароль
+        <input type="password" name="new_password" required />
+      </label>
+      <label>
+        Повторите новый пароль
+        <input type="password" name="confirm_password" required />
+      </label>
+      <button type="submit" class="button">Обновить пароль</button>
+    </form>
+  </div>
+
+  <div class="card">
+    <h2>Сессии</h2>
+    <p class="muted">Активных сессий: {{ active_sessions }}</p>
+    <form method="post" action="/settings/logout_all" class="form">
+      <button type="submit" class="button">Выйти на всех устройствах</button>
+    </form>
+  </div>
+</section>
+{% endblock content %}

@@ -13,6 +13,7 @@ use models::{BudgetRecord, DashboardBudget, ReportCategory, ReportMonth, Transac
 use argon2::{Argon2, PasswordHash, PasswordHasher, PasswordVerifier};
 use password_hash::SaltString;
 use rand_core::OsRng;
+use rusqlite::params;
 use rocket::form::Form;
 use rocket::fs::{FileServer, TempFile};
 use rocket::http::{Cookie, CookieJar, SameSite};
@@ -21,6 +22,8 @@ use rocket::serde::Serialize;
 use rocket::State;
 use rocket_dyn_templates::Template;
 use uuid::Uuid;
+
+const MAX_SESSIONS: i64 = 5;
 
 #[derive(FromForm)]
 struct CategoryForm {
@@ -55,6 +58,13 @@ struct LoginForm {
 struct SetupForm {
     username: String,
     password: String,
+    confirm_password: String,
+}
+
+#[derive(FromForm)]
+struct ChangePasswordForm {
+    current_password: String,
+    new_password: String,
     confirm_password: String,
 }
 
@@ -274,6 +284,18 @@ fn render_setup(error: Option<&str>) -> Template {
     )
 }
 
+fn render_settings(username: &str, sessions: i64, error: Option<&str>, notice: Option<&str>) -> Template {
+    Template::render(
+        "settings",
+        serde_json::json!({
+            "username": username,
+            "active_sessions": sessions,
+            "error": error,
+            "notice": notice,
+        }),
+    )
+}
+
 #[get("/setup")]
 fn setup(pool: &State<DbPool>, cookies: &CookieJar<'_>) -> Result<Template, Redirect> {
     let conn = pool.get().map_err(|_| Redirect::to("/login"))?;
@@ -318,6 +340,8 @@ fn setup_post(
     let token = Uuid::new_v4().to_string();
     db::create_session(&conn, user_id, &token, &created_at)
         .map_err(|_| render_setup(Some("Не удалось создать сессию")))?;
+    db::prune_sessions(&conn, user_id, MAX_SESSIONS)
+        .map_err(|_| render_setup(Some("Не удалось обновить сессии")))?;
 
     let mut cookie = Cookie::new("session", token);
     cookie.set_path("/");
@@ -369,6 +393,8 @@ fn login_post(
     let created_at = Local::now().to_rfc3339();
     db::create_session(&conn, user_id, &token, &created_at)
         .map_err(|_| render_login(Some("Не удалось создать сессию")))?;
+    db::prune_sessions(&conn, user_id, MAX_SESSIONS)
+        .map_err(|_| render_login(Some("Не удалось обновить сессии")))?;
 
     let mut cookie = Cookie::new("session", token);
     cookie.set_path("/");
@@ -377,6 +403,88 @@ fn login_post(
     cookies.add(cookie);
 
     Ok(Redirect::to("/"))
+}
+
+#[get("/settings")]
+fn settings(pool: &State<DbPool>, cookies: &CookieJar<'_>) -> Result<Template, Redirect> {
+    let user = require_user(pool, cookies)?;
+    let conn = pool.get().map_err(|_| Redirect::to("/login"))?;
+    let sessions = db::session_count(&conn, user.id).unwrap_or(1);
+    Ok(render_settings(&user.username, sessions, None, None))
+}
+
+#[post("/settings/password", data = "<form>")]
+fn settings_password(
+    pool: &State<DbPool>,
+    cookies: &CookieJar<'_>,
+    form: Form<ChangePasswordForm>,
+) -> Result<Template, Redirect> {
+    let user = require_user(pool, cookies)?;
+    let conn = pool.get().map_err(|_| Redirect::to("/login"))?;
+    let sessions = db::session_count(&conn, user.id).unwrap_or(1);
+    let form = form.into_inner();
+
+    if form.new_password.len() < 6 {
+        return Ok(render_settings(
+            &user.username,
+            sessions,
+            Some("Новый пароль должен быть не короче 6 символов"),
+            None,
+        ));
+    }
+    if form.new_password != form.confirm_password {
+        return Ok(render_settings(
+            &user.username,
+            sessions,
+            Some("Пароли не совпадают"),
+            None,
+        ));
+    }
+
+    let creds = db::user_credentials(&conn, &user.username)
+        .map_err(|_| Redirect::to("/login"))?;
+    let Some((_user_id, hash)) = creds else {
+        return Ok(render_settings(
+            &user.username,
+            sessions,
+            Some("Пользователь не найден"),
+            None,
+        ));
+    };
+    if !verify_password(&hash, &form.current_password) {
+        return Ok(render_settings(
+            &user.username,
+            sessions,
+            Some("Текущий пароль неверный"),
+            None,
+        ));
+    }
+
+    let new_hash = hash_password(&form.new_password).map_err(|_| Redirect::to("/login"))?;
+    conn.execute(
+        "UPDATE users SET password_hash = ?1 WHERE id = ?2",
+        params![new_hash, user.id],
+    )
+    .map_err(|_| Redirect::to("/login"))?;
+    Ok(render_settings(
+        &user.username,
+        sessions,
+        None,
+        Some("Пароль обновлен"),
+    ))
+}
+
+#[post("/settings/logout_all")]
+fn settings_logout_all(pool: &State<DbPool>, cookies: &CookieJar<'_>) -> Redirect {
+    if let Ok(conn) = pool.get() {
+        if let Some(user) = current_user(pool, cookies) {
+            let _ = db::delete_sessions_for_user(&conn, user.id);
+        }
+    }
+    let mut cookie = Cookie::named("session");
+    cookie.set_path("/");
+    cookies.remove(cookie);
+    Redirect::to("/login")
 }
 
 #[get("/logout")]
@@ -453,8 +561,8 @@ async fn add_transaction(
     cookies: &CookieJar<'_>,
     form: Form<TransactionForm<'_>>,
 ) -> Result<Redirect, rocket::http::Status> {
-    if require_user(pool, cookies).is_err() {
-        return Ok(Redirect::to("/login"));
+    if let Err(redirect) = require_user(pool, cookies) {
+        return Ok(redirect);
     }
     let mut form = form.into_inner();
     let amount_cents = parse_amount_to_cents(&form.amount)
@@ -509,8 +617,8 @@ fn add_category(
     cookies: &CookieJar<'_>,
     form: Form<CategoryForm>,
 ) -> Result<Redirect, rocket::http::Status> {
-    if require_user(pool, cookies).is_err() {
-        return Ok(Redirect::to("/login"));
+    if let Err(redirect) = require_user(pool, cookies) {
+        return Ok(redirect);
     }
     let form = form.into_inner();
     if form.name.trim().is_empty() {
@@ -552,8 +660,8 @@ fn add_budget(
     cookies: &CookieJar<'_>,
     form: Form<BudgetForm>,
 ) -> Result<Redirect, rocket::http::Status> {
-    if require_user(pool, cookies).is_err() {
-        return Ok(Redirect::to("/login"));
+    if let Err(redirect) = require_user(pool, cookies) {
+        return Ok(redirect);
     }
     let form = form.into_inner();
     let amount_cents = parse_amount_to_cents(&form.amount)
@@ -684,6 +792,9 @@ fn rocket() -> _ {
                 login,
                 login_post,
                 logout,
+                settings,
+                settings_password,
+                settings_logout_all,
                 dashboard,
                 transactions,
                 add_transaction,

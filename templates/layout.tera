@@ -27,6 +27,7 @@
         {% if username %}
           <div class="user-chip">
             <span>{{ username }}</span>
+            <a href="/settings" class="nav-link">Настройки</a>
             <a href="/logout" class="nav-link">Выйти</a>
           </div>
         {% endif %}

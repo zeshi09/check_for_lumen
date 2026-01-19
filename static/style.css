@@ -202,6 +202,14 @@ main {
   border-radius: 12px;
 }
 
+.notice {
+  color: var(--accent-2);
+  background: rgba(44, 109, 109, 0.08);
+  border: 1px solid rgba(44, 109, 109, 0.2);
+  padding: 10px 12px;
+  border-radius: 12px;
+}
+
 .form {
   display: grid;
   gap: 12px;
