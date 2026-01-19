@@ -1,0 +1,57 @@
+{% extends "layout.tera" %}
+
+{% block content %}
+<section class="page-head">
+  <div>
+    <h1>Отчеты</h1>
+    <p class="muted">Сводка по месяцам и расходам</p>
+  </div>
+</section>
+
+<section class="grid grid-2">
+  <div class="card">
+    <h2>Месячная динамика</h2>
+    {% if months | length == 0 %}
+      <p class="muted">Нет данных для отчета.</p>
+    {% else %}
+      <div class="table">
+        <div class="table-row table-head cols-4">
+          <div>Месяц</div>
+          <div>Доход</div>
+          <div>Расход</div>
+          <div>Итог</div>
+        </div>
+        {% for m in months %}
+          <div class="table-row cols-4">
+            <div>{{ m.month }}</div>
+            <div class="positive">{{ m.income }}</div>
+            <div class="negative">{{ m.expense }}</div>
+            <div>{{ m.net }}</div>
+          </div>
+        {% endfor %}
+      </div>
+    {% endif %}
+  </div>
+
+  <div class="card">
+    <h2>Расходы по категориям</h2>
+    <p class="muted">Текущий месяц: {{ month }}</p>
+    {% if categories | length == 0 %}
+      <p class="muted">Пока нет расходов.</p>
+    {% else %}
+      <div class="table">
+        <div class="table-row table-head cols-2">
+          <div>Категория</div>
+          <div>Сумма</div>
+        </div>
+        {% for c in categories %}
+          <div class="table-row cols-2">
+            <div>{{ c.category_name }}</div>
+            <div class="negative">{{ c.expense }}</div>
+          </div>
+        {% endfor %}
+      </div>
+    {% endif %}
+  </div>
+</section>
+{% endblock content %}

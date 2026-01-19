@@ -1,0 +1,50 @@
+{% extends "layout.tera" %}
+
+{% block content %}
+<section class="page-head">
+  <div>
+    <h1>Категории</h1>
+    <p class="muted">Доходы и расходы группируются по категориям</p>
+  </div>
+</section>
+
+<section class="grid grid-2">
+  <div class="card">
+    <h2>Новая категория</h2>
+    <form method="post" action="/categories" class="form">
+      <label>
+        Название
+        <input type="text" name="name" placeholder="Продукты" required />
+      </label>
+      <label>
+        Тип
+        <select name="kind" required>
+          <option value="expense">Расход</option>
+          <option value="income">Доход</option>
+        </select>
+      </label>
+      <button type="submit" class="button">Добавить</button>
+    </form>
+  </div>
+
+  <div class="card">
+    <h2>Список</h2>
+    {% if categories | length == 0 %}
+      <p class="muted">Пока пусто.</p>
+    {% else %}
+      <div class="table">
+        <div class="table-row table-head cols-2">
+          <div>Название</div>
+          <div>Тип</div>
+        </div>
+        {% for c in categories %}
+          <div class="table-row cols-2">
+            <div>{{ c.name }}</div>
+            <div class="pill {{ c.kind }}">{{ c.kind }}</div>
+          </div>
+        {% endfor %}
+      </div>
+    {% endif %}
+  </div>
+</section>
+{% endblock content %}

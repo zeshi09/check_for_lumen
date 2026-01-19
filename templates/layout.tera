@@ -1,0 +1,38 @@
+<!doctype html>
+<html lang="ru">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Lumen Check</title>
+    <link rel="stylesheet" href="/static/style.css" />
+  </head>
+  <body>
+    <div class="bg" aria-hidden="true"></div>
+    <header class="site-header">
+      <div class="container">
+        <div class="brand">
+          <div class="brand-mark">LC</div>
+          <div>
+            <div class="brand-title">Lumen Check</div>
+            <div class="brand-sub">личные финансы</div>
+          </div>
+        </div>
+        <nav class="nav">
+          <a href="/" class="nav-link">Дашборд</a>
+          <a href="/transactions" class="nav-link">Доходы и расходы</a>
+          <a href="/categories" class="nav-link">Категории</a>
+          <a href="/budgets" class="nav-link">Бюджеты</a>
+          <a href="/reports" class="nav-link">Отчеты</a>
+        </nav>
+      </div>
+    </header>
+
+    <main class="container">
+      {% block content %}{% endblock content %}
+    </main>
+
+    <footer class="footer">
+      <div class="container">Локальные данные, файл SQLite в папке проекта.</div>
+    </footer>
+  </body>
+</html>

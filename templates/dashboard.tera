@@ -1,0 +1,54 @@
+{% extends "layout.tera" %}
+
+{% block content %}
+<section class="page-head">
+  <div>
+    <h1>Дашборд</h1>
+    <p class="muted">Текущий месяц: {{ month }}</p>
+  </div>
+</section>
+
+<section class="grid grid-3">
+  <div class="card glow">
+    <div class="label">Доходы</div>
+    <div class="amount positive">{{ income }}</div>
+  </div>
+  <div class="card glow">
+    <div class="label">Расходы</div>
+    <div class="amount negative">{{ expense }}</div>
+  </div>
+  <div class="card glow">
+    <div class="label">Итог</div>
+    <div class="amount">{{ net }}</div>
+  </div>
+</section>
+
+<section class="section">
+  <div class="section-head">
+    <h2>Бюджеты</h2>
+    <div class="muted">Контроль лимитов по категориям</div>
+  </div>
+  <div class="card">
+    {% if budgets | length == 0 %}
+      <p class="muted">Добавьте бюджеты, чтобы видеть прогресс.</p>
+    {% else %}
+      <div class="budget-list">
+        {% for b in budgets %}
+          <div class="budget-item">
+            <div>
+              <div class="label">{{ b.category_name }}</div>
+              <div class="muted">Осталось: {{ b.remaining }}</div>
+            </div>
+            <div class="budget-right">
+              <div class="amount">{{ b.spent }} / {{ b.budget }}</div>
+              <div class="progress">
+                <div class="progress-bar" style="width: {{ b.percent }}%"></div>
+              </div>
+            </div>
+          </div>
+        {% endfor %}
+      </div>
+    {% endif %}
+  </div>
+</section>
+{% endblock content %}

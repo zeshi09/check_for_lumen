@@ -1,0 +1,73 @@
+{% extends "layout.tera" %}
+
+{% block content %}
+<section class="page-head">
+  <div>
+    <h1>Доходы и расходы</h1>
+    <p class="muted">Последние операции и добавление новых</p>
+  </div>
+</section>
+
+<section class="grid grid-2">
+  <div class="card">
+    <h2>Новая операция</h2>
+    <form method="post" action="/transactions" class="form">
+      <label>
+        Тип
+        <select name="kind" required>
+          <option value="income">Доход</option>
+          <option value="expense">Расход</option>
+        </select>
+      </label>
+      <label>
+        Сумма
+        <input type="text" name="amount" placeholder="1000.00" required />
+      </label>
+      <label>
+        Категория
+        <select name="category_id">
+          <option value="">Без категории</option>
+          {% for c in categories %}
+            <option value="{{ c.id }}">{{ c.name }} ({{ c.kind }})</option>
+          {% endfor %}
+        </select>
+      </label>
+      <label>
+        Дата
+        <input type="date" name="occurred_on" value="{{ today }}" />
+      </label>
+      <label>
+        Заметка
+        <input type="text" name="note" placeholder="Комментарий" />
+      </label>
+      <button type="submit" class="button">Добавить</button>
+    </form>
+  </div>
+
+  <div class="card">
+    <h2>История</h2>
+    {% if transactions | length == 0 %}
+      <p class="muted">Пока нет записей.</p>
+    {% else %}
+      <div class="table">
+        <div class="table-row table-head">
+          <div>Дата</div>
+          <div>Тип</div>
+          <div>Категория</div>
+          <div>Сумма</div>
+          <div>Заметка</div>
+        </div>
+        {% for t in transactions %}
+          <div class="table-row">
+            <div>{{ t.occurred_on }}</div>
+            <div class="pill {{ t.kind }}">{{ t.kind }}</div>
+            <div>{{ t.category_name | default(value="-") }}</div>
+            <div class="amount {% if t.kind == \"expense\" %}negative{% else %}positive{% endif %}">{{ t.amount }}</div>
+            <div>{{ t.note | default(value="") }}</div>
+          </div>
+        {% endfor %}
+      </div>
+    {% endif %}
+  </div>
+</section>
+{% endblock content %}

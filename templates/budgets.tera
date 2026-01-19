@@ -1,0 +1,66 @@
+{% extends "layout.tera" %}
+
+{% block content %}
+<section class="page-head">
+  <div>
+    <h1>Бюджеты</h1>
+    <p class="muted">Лимиты по категориям расходов</p>
+  </div>
+</section>
+
+<section class="grid grid-2">
+  <div class="card">
+    <h2>Новый бюджет</h2>
+    <form method="post" action="/budgets" class="form">
+      <label>
+        Месяц
+        <input type="month" name="month" value="{{ month }}" required />
+      </label>
+      <label>
+        Категория
+        <select name="category_id" required>
+          {% for c in categories %}
+            {% if c.kind == "expense" %}
+              <option value="{{ c.id }}">{{ c.name }}</option>
+            {% endif %}
+          {% endfor %}
+        </select>
+      </label>
+      <label>
+        Сумма
+        <input type="text" name="amount" placeholder="10000.00" required />
+      </label>
+      <button type="submit" class="button">Добавить</button>
+    </form>
+  </div>
+
+  <div class="card">
+    <h2>Текущий месяц</h2>
+    {% if budgets | length == 0 %}
+      <p class="muted">Бюджеты не заданы.</p>
+    {% else %}
+      <div class="table">
+        <div class="table-row table-head cols-4">
+          <div>Категория</div>
+          <div>Лимит</div>
+          <div>Потрачено</div>
+          <div>Осталось</div>
+        </div>
+        {% for b in budgets %}
+          <div class="table-row cols-4">
+            <div>{{ b.category_name }}</div>
+            <div>{{ b.amount }}</div>
+            <div class="negative">{{ b.spent }}</div>
+            <div>{{ b.remaining }}</div>
+          </div>
+          <div class="table-row table-progress">
+            <div class="progress">
+              <div class="progress-bar" style="width: {{ b.percent }}%"></div>
+            </div>
+          </div>
+        {% endfor %}
+      </div>
+    {% endif %}
+  </div>
+</section>
+{% endblock content %}
