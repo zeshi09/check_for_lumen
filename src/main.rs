@@ -4,7 +4,8 @@ extern crate rocket;
 mod db;
 mod models;
 
-use std::path::PathBuf;
+use std::collections::BTreeSet;
+use std::path::{Path, PathBuf};
 
 use chrono::Local;
 use db::DbPool;
@@ -132,24 +133,76 @@ fn current_month() -> String {
     Local::now().date_naive().format("%Y-%m").to_string()
 }
 
+fn selected_month(month: Option<String>) -> String {
+    month
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
+        .unwrap_or_else(current_month)
+}
+
 fn is_receipt_category(name: &str) -> bool {
     name.trim().to_lowercase() == "жкх"
 }
 
+fn receipts_dir() -> PathBuf {
+    let mut dir = PathBuf::from("data");
+    dir.push("receipts");
+    dir
+}
+
+fn allowed_extension(name: &str) -> Option<String> {
+    let ext = Path::new(name).extension()?.to_str()?.to_lowercase();
+    match ext.as_str() {
+        "jpg" | "jpeg" | "png" | "webp" | "heic" => Some(ext),
+        _ => None,
+    }
+}
+
+async fn persist_receipt(
+    receipt: Option<TempFile<'_>>,
+    category_name: Option<&str>,
+    kind: &str,
+) -> Result<Option<String>, rocket::http::Status> {
+    let Some(mut receipt) = receipt else {
+        return Ok(None);
+    };
+    let Some(category_name) = category_name else {
+        return Ok(None);
+    };
+    if kind != "expense" || !is_receipt_category(category_name) {
+        return Ok(None);
+    }
+
+    let ext = receipt
+        .name()
+        .and_then(allowed_extension)
+        .unwrap_or_else(|| "jpg".to_string());
+    let filename = format!("receipt-{}.{}", Local::now().timestamp_millis(), ext);
+    let dir = receipts_dir();
+    std::fs::create_dir_all(&dir).map_err(|_| rocket::http::Status::InternalServerError)?;
+    let path = dir.join(&filename);
+    receipt
+        .persist_to(&path)
+        .await
+        .map_err(|_| rocket::http::Status::InternalServerError)?;
+    Ok(Some(filename))
+}
+
 fn available_months(conn: &rusqlite::Connection) -> Vec<String> {
-    let mut months = db::list_months(conn, 24).unwrap_or_default();
-    let budget_months = db::list_budget_months(conn, 24).unwrap_or_default();
-    months.extend(budget_months);
-    months.push(current_month());
-    months.sort();
-    months.dedup();
-    months.reverse();
-    months
+    let mut set = BTreeSet::new();
+    for month in db::list_months(conn, 24).unwrap_or_default() {
+        set.insert(month);
+    }
+    for month in db::list_budget_months(conn, 24).unwrap_or_default() {
+        set.insert(month);
+    }
+    set.insert(current_month());
+    set.into_iter().rev().collect()
 }
 
 #[get("/?<month>")]
 fn dashboard(pool: &State<DbPool>, month: Option<String>) -> Template {
-    let selected = month.unwrap_or_else(current_month);
+    let selected = selected_month(month);
     let conn = pool.get().expect("db connection");
     let (income_cents, expense_cents) =
         db::month_totals(&conn, &selected).unwrap_or((0, 0));
@@ -174,7 +227,7 @@ fn dashboard(pool: &State<DbPool>, month: Option<String>) -> Template {
 #[get("/transactions?<month>")]
 fn transactions(pool: &State<DbPool>, month: Option<String>) -> Template {
     let conn = pool.get().expect("db connection");
-    let selected = month.unwrap_or_else(current_month);
+    let selected = selected_month(month);
     let records = db::list_transactions(&conn, Some(&selected)).unwrap_or_default();
     let categories = db::list_categories(&conn).unwrap_or_default();
     let views = records.into_iter().map(transaction_view).collect::<Vec<_>>();
@@ -212,28 +265,8 @@ async fn add_transaction(
         None
     };
     drop(conn);
-
-    let mut receipt_path = None;
-    if let (Some(mut receipt), Some(name)) = (form.receipt.take(), category_name.as_deref()) {
-        if is_receipt_category(name) {
-            let ext = receipt
-                .name()
-                .and_then(|name| std::path::Path::new(name).extension())
-                .and_then(|ext| ext.to_str())
-                .unwrap_or("bin");
-            let filename = format!("receipt-{}.{}", Local::now().timestamp_millis(), ext);
-            let mut dir = PathBuf::from("data");
-            dir.push("receipts");
-            std::fs::create_dir_all(&dir)
-                .map_err(|_| rocket::http::Status::InternalServerError)?;
-            let path = dir.join(&filename);
-            receipt
-                .persist_to(&path)
-                .await
-                .map_err(|_| rocket::http::Status::InternalServerError)?;
-            receipt_path = Some(filename);
-        }
-    }
+    let receipt_path =
+        persist_receipt(form.receipt.take(), category_name.as_deref(), &form.kind).await?;
 
     let conn = pool.get().map_err(|_| rocket::http::Status::InternalServerError)?;
     db::insert_transaction(
@@ -275,7 +308,7 @@ fn add_category(pool: &State<DbPool>, form: Form<CategoryForm>) -> Result<Redire
 #[get("/budgets?<month>")]
 fn budgets(pool: &State<DbPool>, month: Option<String>) -> Template {
     let conn = pool.get().expect("db connection");
-    let selected = month.unwrap_or_else(current_month);
+    let selected = selected_month(month);
     let list = db::list_budgets(&conn, &selected).unwrap_or_default();
     let categories = db::list_categories(&conn).unwrap_or_default();
     let views = list.into_iter().map(budget_view).collect::<Vec<_>>();
@@ -310,7 +343,7 @@ fn add_budget(pool: &State<DbPool>, form: Form<BudgetForm>) -> Result<Redirect, 
 #[get("/reports?<month>")]
 fn reports(pool: &State<DbPool>, month: Option<String>) -> Template {
     let conn = pool.get().expect("db connection");
-    let selected = month.unwrap_or_else(current_month);
+    let selected = selected_month(month);
     let months = db::report_months(&conn, 12).unwrap_or_default();
     let categories = db::report_categories(&conn, &selected).unwrap_or_default();
     let month_options = available_months(&conn);
@@ -402,6 +435,8 @@ fn rocket() -> _ {
     std::fs::create_dir_all(&db_path).expect("create data directory");
     db_path.push("lumen.sqlite");
     let pool = db::init_db(&db_path);
+    let receipts = receipts_dir();
+    std::fs::create_dir_all(&receipts).expect("create receipts directory");
 
     rocket::build()
         .manage(pool)
@@ -419,6 +454,6 @@ fn rocket() -> _ {
             ],
         )
         .mount("/static", FileServer::from("static"))
-        .mount("/receipts", FileServer::from("data/receipts"))
+        .mount("/receipts", FileServer::from(receipts))
         .attach(Template::fairing())
 }
