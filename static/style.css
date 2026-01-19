@@ -264,6 +264,10 @@ select {
   grid-template-columns: repeat(4, minmax(0, 1fr));
 }
 
+.table-row.cols-6 {
+  grid-template-columns: repeat(6, minmax(0, 1fr));
+}
+
 .table-row.table-head {
   font-size: 12px;
   text-transform: uppercase;
@@ -338,6 +342,15 @@ select {
   padding: 20px 0;
   color: var(--muted);
   font-size: 12px;
+}
+
+.link {
+  color: var(--accent-2);
+  text-decoration: none;
+}
+
+.link:hover {
+  text-decoration: underline;
 }
 
 @keyframes fadeIn {

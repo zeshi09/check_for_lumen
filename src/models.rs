@@ -15,6 +15,7 @@ pub struct TransactionRecord {
     pub occurred_on: String,
     pub note: Option<String>,
     pub category_name: Option<String>,
+    pub receipt_path: Option<String>,
 }
 
 #[derive(Serialize)]

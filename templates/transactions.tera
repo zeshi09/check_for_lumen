@@ -22,7 +22,7 @@
 <section class="grid grid-2">
   <div class="card">
     <h2>Новая операция</h2>
-    <form method="post" action="/transactions" class="form">
+    <form method="post" action="/transactions" class="form" enctype="multipart/form-data">
       <label>
         Тип
         <select name="kind" required>
@@ -51,6 +51,10 @@
         Заметка
         <input type="text" name="note" placeholder="Комментарий" />
       </label>
+      <label>
+        Квитанция (ЖКХ)
+        <input type="file" name="receipt" accept="image/*" />
+      </label>
       <button type="submit" class="button">Добавить</button>
     </form>
   </div>
@@ -61,20 +65,28 @@
       <p class="muted">Пока нет записей.</p>
     {% else %}
       <div class="table">
-        <div class="table-row table-head">
+        <div class="table-row table-head cols-6">
           <div>Дата</div>
           <div>Тип</div>
           <div>Категория</div>
           <div>Сумма</div>
           <div>Заметка</div>
+          <div>Квитанция</div>
         </div>
         {% for t in transactions %}
-          <div class="table-row">
+          <div class="table-row cols-6">
             <div>{{ t.occurred_on }}</div>
             <div class="pill {{ t.kind }}">{{ t.kind }}</div>
             <div>{{ t.category_name | default(value="-") }}</div>
             <div class="amount {% if t.kind == \"expense\" %}negative{% else %}positive{% endif %}">{{ t.amount }}</div>
             <div>{{ t.note | default(value="") }}</div>
+            <div>
+              {% if t.receipt_url %}
+                <a href="{{ t.receipt_url }}" target="_blank" class="link">Открыть</a>
+              {% else %}
+                -
+              {% endif %}
+            </div>
           </div>
         {% endfor %}
       </div>

@@ -10,7 +10,7 @@ use chrono::Local;
 use db::DbPool;
 use models::{BudgetRecord, DashboardBudget, ReportCategory, ReportMonth, TransactionRecord};
 use rocket::form::Form;
-use rocket::fs::FileServer;
+use rocket::fs::{FileServer, TempFile};
 use rocket::response::Redirect;
 use rocket::serde::Serialize;
 use rocket::State;
@@ -23,12 +23,13 @@ struct CategoryForm {
 }
 
 #[derive(FromForm)]
-struct TransactionForm {
+struct TransactionForm<'r> {
     kind: String,
     amount: String,
     category_id: Option<i64>,
     occurred_on: String,
     note: Option<String>,
+    receipt: Option<TempFile<'r>>,
 }
 
 #[derive(FromForm)]
@@ -46,6 +47,7 @@ struct TransactionView {
     occurred_on: String,
     note: Option<String>,
     category_name: Option<String>,
+    receipt_url: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -130,6 +132,10 @@ fn current_month() -> String {
     Local::now().date_naive().format("%Y-%m").to_string()
 }
 
+fn is_receipt_category(name: &str) -> bool {
+    name.trim().to_lowercase() == "жкх"
+}
+
 fn available_months(conn: &rusqlite::Connection) -> Vec<String> {
     let mut months = db::list_months(conn, 24).unwrap_or_default();
     let budget_months = db::list_budget_months(conn, 24).unwrap_or_default();
@@ -185,8 +191,11 @@ fn transactions(pool: &State<DbPool>, month: Option<String>) -> Template {
 }
 
 #[post("/transactions", data = "<form>")]
-fn add_transaction(pool: &State<DbPool>, form: Form<TransactionForm>) -> Result<Redirect, rocket::http::Status> {
-    let form = form.into_inner();
+async fn add_transaction(
+    pool: &State<DbPool>,
+    form: Form<TransactionForm<'_>>,
+) -> Result<Redirect, rocket::http::Status> {
+    let mut form = form.into_inner();
     let amount_cents = parse_amount_to_cents(&form.amount)
         .ok_or(rocket::http::Status::BadRequest)?;
     let occurred_on = if form.occurred_on.trim().is_empty() {
@@ -196,6 +205,37 @@ fn add_transaction(pool: &State<DbPool>, form: Form<TransactionForm>) -> Result<
     };
 
     let conn = pool.get().map_err(|_| rocket::http::Status::InternalServerError)?;
+    let category_name = if let Some(category_id) = form.category_id {
+        db::category_name_by_id(&conn, category_id)
+            .map_err(|_| rocket::http::Status::InternalServerError)?
+    } else {
+        None
+    };
+    drop(conn);
+
+    let mut receipt_path = None;
+    if let (Some(mut receipt), Some(name)) = (form.receipt.take(), category_name.as_deref()) {
+        if is_receipt_category(name) {
+            let ext = receipt
+                .name()
+                .and_then(|name| std::path::Path::new(name).extension())
+                .and_then(|ext| ext.to_str())
+                .unwrap_or("bin");
+            let filename = format!("receipt-{}.{}", Local::now().timestamp_millis(), ext);
+            let mut dir = PathBuf::from("data");
+            dir.push("receipts");
+            std::fs::create_dir_all(&dir)
+                .map_err(|_| rocket::http::Status::InternalServerError)?;
+            let path = dir.join(&filename);
+            receipt
+                .persist_to(&path)
+                .await
+                .map_err(|_| rocket::http::Status::InternalServerError)?;
+            receipt_path = Some(filename);
+        }
+    }
+
+    let conn = pool.get().map_err(|_| rocket::http::Status::InternalServerError)?;
     db::insert_transaction(
         &conn,
         &form.kind,
@@ -203,6 +243,7 @@ fn add_transaction(pool: &State<DbPool>, form: Form<TransactionForm>) -> Result<
         form.category_id,
         &occurred_on,
         form.note.as_deref(),
+        receipt_path.as_deref(),
     )
     .map_err(|_| rocket::http::Status::InternalServerError)?;
 
@@ -300,6 +341,9 @@ fn transaction_view(record: TransactionRecord) -> TransactionView {
         occurred_on: record.occurred_on,
         note: record.note,
         category_name: record.category_name,
+        receipt_url: record
+            .receipt_path
+            .map(|name| format!("/receipts/{name}")),
     }
 }
 
@@ -375,5 +419,6 @@ fn rocket() -> _ {
             ],
         )
         .mount("/static", FileServer::from("static"))
+        .mount("/receipts", FileServer::from("data/receipts"))
         .attach(Template::fairing())
 }

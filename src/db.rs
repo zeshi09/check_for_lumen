@@ -38,6 +38,7 @@ fn run_migrations(conn: &Connection) -> Result<()> {
             category_id INTEGER,
             occurred_on TEXT NOT NULL,
             note TEXT,
+            receipt_path TEXT,
             FOREIGN KEY(category_id) REFERENCES categories(id)
         );
 
@@ -49,6 +50,22 @@ fn run_migrations(conn: &Connection) -> Result<()> {
             FOREIGN KEY(category_id) REFERENCES categories(id)
         );
         ",
+    )?;
+    ensure_column(conn, "transactions", "receipt_path", "TEXT")?;
+    Ok(())
+}
+
+fn ensure_column(conn: &Connection, table: &str, column: &str, column_type: &str) -> Result<()> {
+    let mut stmt = conn.prepare(&format!("PRAGMA table_info({table})"))?;
+    let rows = stmt.query_map([], |row| row.get::<_, String>(1))?;
+    for row in rows {
+        if row? == column {
+            return Ok(());
+        }
+    }
+    conn.execute(
+        &format!("ALTER TABLE {table} ADD COLUMN {column} {column_type}"),
+        [],
     )?;
     Ok(())
 }
@@ -88,7 +105,7 @@ pub fn list_transactions(conn: &Connection, month: Option<&str>) -> Result<Vec<T
     let (query, params) = if let Some(month) = month {
         (
             "
-            SELECT t.id, t.kind, t.amount_cents, t.occurred_on, t.note, c.name
+            SELECT t.id, t.kind, t.amount_cents, t.occurred_on, t.note, c.name, t.receipt_path
             FROM transactions t
             LEFT JOIN categories c ON t.category_id = c.id
             WHERE t.occurred_on LIKE ?1
@@ -100,7 +117,7 @@ pub fn list_transactions(conn: &Connection, month: Option<&str>) -> Result<Vec<T
     } else {
         (
             "
-            SELECT t.id, t.kind, t.amount_cents, t.occurred_on, t.note, c.name
+            SELECT t.id, t.kind, t.amount_cents, t.occurred_on, t.note, c.name, t.receipt_path
             FROM transactions t
             LEFT JOIN categories c ON t.category_id = c.id
             ORDER BY t.occurred_on DESC, t.id DESC
@@ -119,6 +136,7 @@ pub fn list_transactions(conn: &Connection, month: Option<&str>) -> Result<Vec<T
             occurred_on: row.get(3)?,
             note: row.get(4)?,
             category_name: row.get(5)?,
+            receipt_path: row.get(6)?,
         })
     })?;
 
@@ -136,13 +154,21 @@ pub fn insert_transaction(
     category_id: Option<i64>,
     occurred_on: &str,
     note: Option<&str>,
+    receipt_path: Option<&str>,
 ) -> Result<()> {
     conn.execute(
         "
-        INSERT INTO transactions (kind, amount_cents, category_id, occurred_on, note)
-        VALUES (?1, ?2, ?3, ?4, ?5)
+        INSERT INTO transactions (kind, amount_cents, category_id, occurred_on, note, receipt_path)
+        VALUES (?1, ?2, ?3, ?4, ?5, ?6)
         ",
-        params![kind, amount_cents, category_id, occurred_on, note],
+        params![
+            kind,
+            amount_cents,
+            category_id,
+            occurred_on,
+            note,
+            receipt_path
+        ],
     )?;
     Ok(())
 }
@@ -345,4 +371,20 @@ pub fn list_budget_months(conn: &Connection, limit: i64) -> Result<Vec<String>> 
         out.push(row?);
     }
     Ok(out)
+}
+
+pub fn category_name_by_id(conn: &Connection, category_id: i64) -> Result<Option<String>> {
+    let mut stmt = conn.prepare(
+        "
+        SELECT name
+        FROM categories
+        WHERE id = ?1
+        ",
+    )?;
+    let mut rows = stmt.query(params![category_id])?;
+    if let Some(row) = rows.next()? {
+        Ok(Some(row.get(0)?))
+    } else {
+        Ok(None)
+    }
 }
