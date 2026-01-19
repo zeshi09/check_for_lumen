@@ -9,13 +9,18 @@ use std::path::{Path, PathBuf};
 
 use chrono::Local;
 use db::DbPool;
-use models::{BudgetRecord, DashboardBudget, ReportCategory, ReportMonth, TransactionRecord};
+use models::{BudgetRecord, DashboardBudget, ReportCategory, ReportMonth, TransactionRecord, User};
+use argon2::{Argon2, PasswordHash, PasswordHasher, PasswordVerifier};
+use password_hash::SaltString;
+use rand_core::OsRng;
 use rocket::form::Form;
 use rocket::fs::{FileServer, TempFile};
+use rocket::http::{Cookie, CookieJar, SameSite};
 use rocket::response::Redirect;
 use rocket::serde::Serialize;
 use rocket::State;
 use rocket_dyn_templates::Template;
+use uuid::Uuid;
 
 #[derive(FromForm)]
 struct CategoryForm {
@@ -38,6 +43,19 @@ struct BudgetForm {
     category_id: i64,
     month: String,
     amount: String,
+}
+
+#[derive(FromForm)]
+struct LoginForm {
+    username: String,
+    password: String,
+}
+
+#[derive(FromForm)]
+struct SetupForm {
+    username: String,
+    password: String,
+    confirm_password: String,
 }
 
 #[derive(Serialize)]
@@ -200,8 +218,187 @@ fn available_months(conn: &rusqlite::Connection) -> Vec<String> {
     set.into_iter().rev().collect()
 }
 
+fn hash_password(password: &str) -> Result<String, rocket::http::Status> {
+    let salt = SaltString::generate(&mut OsRng);
+    let argon2 = Argon2::default();
+    let hash = argon2
+        .hash_password(password.as_bytes(), &salt)
+        .map_err(|_| rocket::http::Status::InternalServerError)?;
+    Ok(hash.to_string())
+}
+
+fn verify_password(hash: &str, password: &str) -> bool {
+    let parsed = match PasswordHash::new(hash) {
+        Ok(parsed) => parsed,
+        Err(_) => return false,
+    };
+    Argon2::default()
+        .verify_password(password.as_bytes(), &parsed)
+        .is_ok()
+}
+
+fn require_user(pool: &State<DbPool>, cookies: &CookieJar<'_>) -> Result<User, Redirect> {
+    let conn = pool.get().map_err(|_| Redirect::to("/login"))?;
+    if !db::has_users(&conn).unwrap_or(false) {
+        return Err(Redirect::to("/setup"));
+    }
+    if let Some(cookie) = cookies.get("session") {
+        if let Ok(Some(user)) = db::user_by_session(&conn, cookie.value()) {
+            return Ok(user);
+        }
+    }
+    Err(Redirect::to("/login"))
+}
+
+fn current_user(pool: &State<DbPool>, cookies: &CookieJar<'_>) -> Option<User> {
+    let conn = pool.get().ok()?;
+    let token = cookies.get("session")?.value().to_string();
+    db::user_by_session(&conn, &token).ok().flatten()
+}
+
+fn render_login(error: Option<&str>) -> Template {
+    Template::render(
+        "login",
+        serde_json::json!({
+            "error": error,
+        }),
+    )
+}
+
+fn render_setup(error: Option<&str>) -> Template {
+    Template::render(
+        "setup",
+        serde_json::json!({
+            "error": error,
+        }),
+    )
+}
+
+#[get("/setup")]
+fn setup(pool: &State<DbPool>, cookies: &CookieJar<'_>) -> Result<Template, Redirect> {
+    let conn = pool.get().map_err(|_| Redirect::to("/login"))?;
+    if db::has_users(&conn).unwrap_or(false) {
+        if current_user(pool, cookies).is_some() {
+            return Err(Redirect::to("/"));
+        }
+        return Err(Redirect::to("/login"));
+    }
+    Ok(render_setup(None))
+}
+
+#[post("/setup", data = "<form>")]
+fn setup_post(
+    pool: &State<DbPool>,
+    cookies: &CookieJar<'_>,
+    form: Form<SetupForm>,
+) -> Result<Redirect, Template> {
+    let conn = pool.get().map_err(|_| render_setup(Some("Ошибка подключения к базе")))?;
+    if db::has_users(&conn).unwrap_or(false) {
+        return Ok(Redirect::to("/login"));
+    }
+
+    let form = form.into_inner();
+    let username = form.username.trim();
+    if username.is_empty() {
+        return Err(render_setup(Some("Введите логин")));
+    }
+    if form.password.len() < 6 {
+        return Err(render_setup(Some("Пароль должен быть не короче 6 символов")));
+    }
+    if form.password != form.confirm_password {
+        return Err(render_setup(Some("Пароли не совпадают")));
+    }
+
+    let password_hash = hash_password(&form.password)
+        .map_err(|_| render_setup(Some("Не удалось сохранить пароль")))?;
+    let created_at = Local::now().to_rfc3339();
+    let user_id = db::insert_user(&conn, username, &password_hash, &created_at)
+        .map_err(|_| render_setup(Some("Такой логин уже существует")))?;
+
+    let token = Uuid::new_v4().to_string();
+    db::create_session(&conn, user_id, &token, &created_at)
+        .map_err(|_| render_setup(Some("Не удалось создать сессию")))?;
+
+    let mut cookie = Cookie::new("session", token);
+    cookie.set_path("/");
+    cookie.set_http_only(true);
+    cookie.set_same_site(SameSite::Lax);
+    cookies.add(cookie);
+
+    Ok(Redirect::to("/"))
+}
+
+#[get("/login")]
+fn login(pool: &State<DbPool>, cookies: &CookieJar<'_>) -> Result<Template, Redirect> {
+    let conn = pool.get().map_err(|_| Redirect::to("/login"))?;
+    if !db::has_users(&conn).unwrap_or(false) {
+        return Err(Redirect::to("/setup"));
+    }
+    if current_user(pool, cookies).is_some() {
+        return Err(Redirect::to("/"));
+    }
+    Ok(render_login(None))
+}
+
+#[post("/login", data = "<form>")]
+fn login_post(
+    pool: &State<DbPool>,
+    cookies: &CookieJar<'_>,
+    form: Form<LoginForm>,
+) -> Result<Redirect, Template> {
+    let conn = pool.get().map_err(|_| render_login(Some("Ошибка подключения к базе")))?;
+    if !db::has_users(&conn).unwrap_or(false) {
+        return Ok(Redirect::to("/setup"));
+    }
+    let form = form.into_inner();
+    let username = form.username.trim();
+    if username.is_empty() || form.password.is_empty() {
+        return Err(render_login(Some("Введите логин и пароль")));
+    }
+
+    let creds = db::user_credentials(&conn, username)
+        .map_err(|_| render_login(Some("Ошибка поиска пользователя")))?;
+    let Some((user_id, hash)) = creds else {
+        return Err(render_login(Some("Неверный логин или пароль")));
+    };
+    if !verify_password(&hash, &form.password) {
+        return Err(render_login(Some("Неверный логин или пароль")));
+    }
+
+    let token = Uuid::new_v4().to_string();
+    let created_at = Local::now().to_rfc3339();
+    db::create_session(&conn, user_id, &token, &created_at)
+        .map_err(|_| render_login(Some("Не удалось создать сессию")))?;
+
+    let mut cookie = Cookie::new("session", token);
+    cookie.set_path("/");
+    cookie.set_http_only(true);
+    cookie.set_same_site(SameSite::Lax);
+    cookies.add(cookie);
+
+    Ok(Redirect::to("/"))
+}
+
+#[get("/logout")]
+fn logout(pool: &State<DbPool>, cookies: &CookieJar<'_>) -> Redirect {
+    if let Some(cookie) = cookies.get("session") {
+        if let Ok(conn) = pool.get() {
+            let _ = db::delete_session(&conn, cookie.value());
+        }
+    }
+    let mut cookie = Cookie::named("session");
+    cookie.set_path("/");
+    cookies.remove(cookie);
+    Redirect::to("/login")
+}
+
 #[get("/?<month>")]
-fn dashboard(pool: &State<DbPool>, month: Option<String>) -> Template {
+fn dashboard(
+    pool: &State<DbPool>,
+    cookies: &CookieJar<'_>,
+    month: Option<String>,
+) -> Result<Template, Redirect> {
+    let user = require_user(pool, cookies)?;
     let selected = selected_month(month);
     let conn = pool.get().expect("db connection");
     let (income_cents, expense_cents) =
@@ -216,16 +413,22 @@ fn dashboard(pool: &State<DbPool>, month: Option<String>) -> Template {
     let context = serde_json::json!({
         "month": selected,
         "months": months,
+        "username": user.username,
         "income": format_money(income_cents),
         "expense": format_money(expense_cents),
         "net": format_money(income_cents - expense_cents),
         "budgets": budget_views,
     });
-    Template::render("dashboard", &context)
+    Ok(Template::render("dashboard", &context))
 }
 
 #[get("/transactions?<month>")]
-fn transactions(pool: &State<DbPool>, month: Option<String>) -> Template {
+fn transactions(
+    pool: &State<DbPool>,
+    cookies: &CookieJar<'_>,
+    month: Option<String>,
+) -> Result<Template, Redirect> {
+    let user = require_user(pool, cookies)?;
     let conn = pool.get().expect("db connection");
     let selected = selected_month(month);
     let records = db::list_transactions(&conn, Some(&selected)).unwrap_or_default();
@@ -236,18 +439,23 @@ fn transactions(pool: &State<DbPool>, month: Option<String>) -> Template {
     let context = serde_json::json!({
         "month": selected,
         "months": months,
+        "username": user.username,
         "today": today_ymd(),
         "transactions": views,
         "categories": categories,
     });
-    Template::render("transactions", &context)
+    Ok(Template::render("transactions", &context))
 }
 
 #[post("/transactions", data = "<form>")]
 async fn add_transaction(
     pool: &State<DbPool>,
+    cookies: &CookieJar<'_>,
     form: Form<TransactionForm<'_>>,
 ) -> Result<Redirect, rocket::http::Status> {
+    if require_user(pool, cookies).is_err() {
+        return Ok(Redirect::to("/login"));
+    }
     let mut form = form.into_inner();
     let amount_cents = parse_amount_to_cents(&form.amount)
         .ok_or(rocket::http::Status::BadRequest)?;
@@ -284,17 +492,26 @@ async fn add_transaction(
 }
 
 #[get("/categories")]
-fn categories(pool: &State<DbPool>) -> Template {
+fn categories(pool: &State<DbPool>, cookies: &CookieJar<'_>) -> Result<Template, Redirect> {
+    let user = require_user(pool, cookies)?;
     let conn = pool.get().expect("db connection");
     let list = db::list_categories(&conn).unwrap_or_default();
     let context = serde_json::json!({
+        "username": user.username,
         "categories": list,
     });
-    Template::render("categories", &context)
+    Ok(Template::render("categories", &context))
 }
 
 #[post("/categories", data = "<form>")]
-fn add_category(pool: &State<DbPool>, form: Form<CategoryForm>) -> Result<Redirect, rocket::http::Status> {
+fn add_category(
+    pool: &State<DbPool>,
+    cookies: &CookieJar<'_>,
+    form: Form<CategoryForm>,
+) -> Result<Redirect, rocket::http::Status> {
+    if require_user(pool, cookies).is_err() {
+        return Ok(Redirect::to("/login"));
+    }
     let form = form.into_inner();
     if form.name.trim().is_empty() {
         return Err(rocket::http::Status::BadRequest);
@@ -306,7 +523,12 @@ fn add_category(pool: &State<DbPool>, form: Form<CategoryForm>) -> Result<Redire
 }
 
 #[get("/budgets?<month>")]
-fn budgets(pool: &State<DbPool>, month: Option<String>) -> Template {
+fn budgets(
+    pool: &State<DbPool>,
+    cookies: &CookieJar<'_>,
+    month: Option<String>,
+) -> Result<Template, Redirect> {
+    let user = require_user(pool, cookies)?;
     let conn = pool.get().expect("db connection");
     let selected = selected_month(month);
     let list = db::list_budgets(&conn, &selected).unwrap_or_default();
@@ -317,14 +539,22 @@ fn budgets(pool: &State<DbPool>, month: Option<String>) -> Template {
     let context = serde_json::json!({
         "month": selected,
         "months": months,
+        "username": user.username,
         "budgets": views,
         "categories": categories,
     });
-    Template::render("budgets", &context)
+    Ok(Template::render("budgets", &context))
 }
 
 #[post("/budgets", data = "<form>")]
-fn add_budget(pool: &State<DbPool>, form: Form<BudgetForm>) -> Result<Redirect, rocket::http::Status> {
+fn add_budget(
+    pool: &State<DbPool>,
+    cookies: &CookieJar<'_>,
+    form: Form<BudgetForm>,
+) -> Result<Redirect, rocket::http::Status> {
+    if require_user(pool, cookies).is_err() {
+        return Ok(Redirect::to("/login"));
+    }
     let form = form.into_inner();
     let amount_cents = parse_amount_to_cents(&form.amount)
         .ok_or(rocket::http::Status::BadRequest)?;
@@ -341,7 +571,12 @@ fn add_budget(pool: &State<DbPool>, form: Form<BudgetForm>) -> Result<Redirect, 
 }
 
 #[get("/reports?<month>")]
-fn reports(pool: &State<DbPool>, month: Option<String>) -> Template {
+fn reports(
+    pool: &State<DbPool>,
+    cookies: &CookieJar<'_>,
+    month: Option<String>,
+) -> Result<Template, Redirect> {
+    let user = require_user(pool, cookies)?;
     let conn = pool.get().expect("db connection");
     let selected = selected_month(month);
     let months = db::report_months(&conn, 12).unwrap_or_default();
@@ -360,10 +595,11 @@ fn reports(pool: &State<DbPool>, month: Option<String>) -> Template {
     let context = serde_json::json!({
         "month": selected,
         "month_options": month_options,
+        "username": user.username,
         "months": month_views,
         "categories": category_views,
     });
-    Template::render("reports", &context)
+    Ok(Template::render("reports", &context))
 }
 
 fn transaction_view(record: TransactionRecord) -> TransactionView {
@@ -443,6 +679,11 @@ fn rocket() -> _ {
         .mount(
             "/",
             routes![
+                setup,
+                setup_post,
+                login,
+                login_post,
+                logout,
                 dashboard,
                 transactions,
                 add_transaction,

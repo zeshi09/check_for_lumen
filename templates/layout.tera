@@ -24,6 +24,12 @@
           <a href="/budgets" class="nav-link">Бюджеты</a>
           <a href="/reports" class="nav-link">Отчеты</a>
         </nav>
+        {% if username %}
+          <div class="user-chip">
+            <span>{{ username }}</span>
+            <a href="/logout" class="nav-link">Выйти</a>
+          </div>
+        {% endif %}
       </div>
     </header>
 

@@ -19,6 +19,12 @@ pub struct TransactionRecord {
 }
 
 #[derive(Serialize)]
+pub struct User {
+    pub id: i64,
+    pub username: String,
+}
+
+#[derive(Serialize)]
 pub struct BudgetRecord {
     pub id: i64,
     pub category_id: i64,

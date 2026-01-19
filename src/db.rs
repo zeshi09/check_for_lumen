@@ -5,7 +5,7 @@ use r2d2_sqlite::SqliteConnectionManager;
 use rusqlite::{params, Connection, Result};
 
 use crate::models::{
-    BudgetRecord, Category, DashboardBudget, ReportCategory, ReportMonth, TransactionRecord,
+    BudgetRecord, Category, DashboardBudget, ReportCategory, ReportMonth, TransactionRecord, User,
 };
 
 pub type DbPool = Pool<SqliteConnectionManager>;
@@ -48,6 +48,21 @@ fn run_migrations(conn: &Connection) -> Result<()> {
             month TEXT NOT NULL,
             amount_cents INTEGER NOT NULL,
             FOREIGN KEY(category_id) REFERENCES categories(id)
+        );
+
+        CREATE TABLE IF NOT EXISTS users (
+            id INTEGER PRIMARY KEY,
+            username TEXT NOT NULL UNIQUE,
+            password_hash TEXT NOT NULL,
+            created_at TEXT NOT NULL
+        );
+
+        CREATE TABLE IF NOT EXISTS sessions (
+            id INTEGER PRIMARY KEY,
+            user_id INTEGER NOT NULL,
+            token TEXT NOT NULL UNIQUE,
+            created_at TEXT NOT NULL,
+            FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE
         );
         ",
     )?;
@@ -98,6 +113,72 @@ pub fn insert_category(conn: &Connection, name: &str, kind: &str) -> Result<()> 
         "INSERT INTO categories (name, kind) VALUES (?1, ?2)",
         params![name, kind],
     )?;
+    Ok(())
+}
+
+pub fn has_users(conn: &Connection) -> Result<bool> {
+    conn.query_row(
+        "SELECT EXISTS(SELECT 1 FROM users)",
+        [],
+        |row| row.get::<_, i64>(0),
+    )
+    .map(|value| value == 1)
+}
+
+pub fn insert_user(conn: &Connection, username: &str, password_hash: &str, created_at: &str) -> Result<i64> {
+    conn.execute(
+        "INSERT INTO users (username, password_hash, created_at) VALUES (?1, ?2, ?3)",
+        params![username, password_hash, created_at],
+    )?;
+    Ok(conn.last_insert_rowid())
+}
+
+pub fn user_credentials(conn: &Connection, username: &str) -> Result<Option<(i64, String)>> {
+    let mut stmt = conn.prepare(
+        "
+        SELECT id, password_hash
+        FROM users
+        WHERE username = ?1
+        ",
+    )?;
+    let mut rows = stmt.query(params![username])?;
+    if let Some(row) = rows.next()? {
+        Ok(Some((row.get(0)?, row.get(1)?)))
+    } else {
+        Ok(None)
+    }
+}
+
+pub fn create_session(conn: &Connection, user_id: i64, token: &str, created_at: &str) -> Result<()> {
+    conn.execute(
+        "INSERT INTO sessions (user_id, token, created_at) VALUES (?1, ?2, ?3)",
+        params![user_id, token, created_at],
+    )?;
+    Ok(())
+}
+
+pub fn user_by_session(conn: &Connection, token: &str) -> Result<Option<User>> {
+    let mut stmt = conn.prepare(
+        "
+        SELECT u.id, u.username
+        FROM sessions s
+        JOIN users u ON s.user_id = u.id
+        WHERE s.token = ?1
+        ",
+    )?;
+    let mut rows = stmt.query(params![token])?;
+    if let Some(row) = rows.next()? {
+        Ok(Some(User {
+            id: row.get(0)?,
+            username: row.get(1)?,
+        }))
+    } else {
+        Ok(None)
+    }
+}
+
+pub fn delete_session(conn: &Connection, token: &str) -> Result<()> {
+    conn.execute("DELETE FROM sessions WHERE token = ?1", params![token])?;
     Ok(())
 }
 

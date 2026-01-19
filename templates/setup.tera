@@ -1,0 +1,34 @@
+{% extends "layout.tera" %}
+
+{% block content %}
+<section class="page-head">
+  <div>
+    <h1>Создание учетной записи</h1>
+    <p class="muted">Первый запуск приложения</p>
+  </div>
+</section>
+
+<section class="grid grid-2">
+  <div class="card">
+    <h2>Новый пользователь</h2>
+    {% if error %}
+      <p class="error">{{ error }}</p>
+    {% endif %}
+    <form method="post" action="/setup" class="form">
+      <label>
+        Логин
+        <input type="text" name="username" required />
+      </label>
+      <label>
+        Пароль
+        <input type="password" name="password" required />
+      </label>
+      <label>
+        Повторите пароль
+        <input type="password" name="confirm_password" required />
+      </label>
+      <button type="submit" class="button">Создать</button>
+    </form>
+  </div>
+</section>
+{% endblock content %}

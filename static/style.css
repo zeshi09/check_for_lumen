@@ -91,6 +91,14 @@ body {
   flex-wrap: wrap;
 }
 
+.user-chip {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+  color: var(--muted);
+}
+
 .nav-link {
   text-decoration: none;
   color: var(--ink);
@@ -184,6 +192,14 @@ main {
 
 .muted {
   color: var(--muted);
+}
+
+.error {
+  color: #b2483d;
+  background: rgba(178, 72, 61, 0.08);
+  border: 1px solid rgba(178, 72, 61, 0.2);
+  padding: 10px 12px;
+  border-radius: 12px;
 }
 
 .form {
